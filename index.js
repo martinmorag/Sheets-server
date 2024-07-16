@@ -22,7 +22,7 @@ const auth = new google.auth.JWT(
 
 const sheets = google.sheets({ version: 'v4', auth });
 
-app.post('/update-status', async (req, res) => {
+/* app.post('/update-status', async (req, res) => {
   const { email, status } = req.body;
   console.log('Received request:', req.body); // Log received request
 
@@ -95,7 +95,159 @@ app.post('/update-status', async (req, res) => {
     console.error('Error updating status:', error); // Log the error
     res.status(500).send(error);
   }
+}); */
+
+
+app.get('/get-closers', async (req, res) => {
+  try {
+    const getRows = await sheets.spreadsheets.values.get({
+      spreadsheetId: '1VDdVK85wMlxNbI279gsx3qLJGGyeUOuC0nXNEfnSLgg',
+      range: 'Llamadas',
+    });
+
+    const rows = getRows.data.values;
+    if (rows.length) {
+      const headerRow = rows[0];
+      const closerIndex = headerRow.indexOf('Closer');
+
+      if (closerIndex === -1) {
+        return res.status(400).send('Closer column not found');
+      }
+
+      const closers = [...new Set(rows.slice(1).map(row => row[closerIndex]))];
+      res.send({ closers });
+    } else {
+      res.status(404).send('No data found in the spreadsheet');
+    }
+  } catch (error) {
+    res.status(500).send(error);
+  }
 });
+
+
+app.get('/get-emails-by-closer', async (req, res) => {
+  const { closer } = req.query;
+  console.log('Received request to fetch emails for closer:', closer);
+
+  try {
+    const getRows = await sheets.spreadsheets.values.get({
+      spreadsheetId: '1VDdVK85wMlxNbI279gsx3qLJGGyeUOuC0nXNEfnSLgg',
+      range: 'Llamadas',
+    });
+
+    const rows = getRows.data.values;
+    if (rows.length) {
+      const headerRow = rows[0];
+      const closerIndex = headerRow.indexOf('Closer');
+      const emailIndex = headerRow.indexOf('Email');
+
+      if (closerIndex === -1 || emailIndex === -1) {
+        console.error('Closer or Email column not found');
+        return res.status(400).send('Closer or Email column not found');
+      }
+
+      const emails = rows.slice(1).filter(row => row[closerIndex] === closer).map(row => row[emailIndex]);
+      res.send({ emails });
+    } else {
+      console.error('No data found in the spreadsheet');
+      res.status(404).send('No data found in the spreadsheet');
+    }
+  } catch (error) {
+    console.error('Error fetching emails:', error);
+    res.status(500).send(error);
+  }
+});
+
+
+
+app.post('/update-status-email-by-closer', async (req, res) => {
+  const { closer, email, status } = req.body;
+  console.log('Received request to update status and email for closer:', closer, 'email:', email, 'to status:', status);
+
+  try {
+    const getRows = await sheets.spreadsheets.values.get({
+      spreadsheetId: '1VDdVK85wMlxNbI279gsx3qLJGGyeUOuC0nXNEfnSLgg',
+      range: 'Llamadas',
+    });
+
+    const rows = getRows.data.values;
+    if (rows.length > 0) {
+      const headerRow = rows[0];
+      const closerIndex = headerRow.indexOf('Closer');
+      const emailIndex = headerRow.indexOf('Email');
+      const statusIndex = headerRow.indexOf('Estado');
+      const lastModifiedIndex = headerRow.indexOf('Ultima Modificacion');
+
+      if (closerIndex === -1 || emailIndex === -1 || statusIndex === -1 || lastModifiedIndex === -1) {
+        console.error('Closer, Email, Estado, or Ultima Modificacion column not found');
+        return res.status(400).send('Closer, Email, Estado, or Ultima Modificacion column not found');
+      }
+
+      const now = new Date().toISOString();
+      let found = false;
+
+      // Iterate over each row to find the first row with the specified closer and email, then update it
+      for (let i = 1; i < rows.length && !found; i++) {
+        if (rows[i][closerIndex] === closer && rows[i][emailIndex] === email) {
+          const rangeStatus = `Llamadas!${String.fromCharCode(65 + statusIndex)}${i + 1}`;
+          const rangeLastModified = `Llamadas!${String.fromCharCode(65 + lastModifiedIndex)}${i + 1}`;
+          const rangeEmail = `Llamadas!${String.fromCharCode(65 + emailIndex)}${i + 1}`;
+
+          console.log('Updating range:', rangeStatus, 'with status:', status);
+          console.log('Updating range:', rangeLastModified, 'with last modified:', now);
+          console.log('Updating range:', rangeEmail, 'with email:', email);
+
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: '1VDdVK85wMlxNbI279gsx3qLJGGyeUOuC0nXNEfnSLgg',
+            range: rangeStatus,
+            valueInputOption: 'RAW',
+            resource: {
+              values: [[status]],
+            },
+          });
+
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: '1VDdVK85wMlxNbI279gsx3qLJGGyeUOuC0nXNEfnSLgg',
+            range: rangeLastModified,
+            valueInputOption: 'RAW',
+            resource: {
+              values: [[now]],
+            },
+          });
+
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: '1VDdVK85wMlxNbI279gsx3qLJGGyeUOuC0nXNEfnSLgg',
+            range: rangeEmail,
+            valueInputOption: 'RAW',
+            resource: {
+              values: [[email]],
+            },
+          });
+
+          found = true; // Mark as found to stop iterating further
+        }
+      }
+
+      if (!found) {
+        console.error('No rows found for closer:', closer, 'and email:', email);
+        return res.status(404).send('No rows found for closer and email');
+      }
+
+      console.log('Status, Email, and Last Modified updated successfully for closer:', closer);
+      res.send({ status: 'success' });
+    } else {
+      console.error('No data found in the spreadsheet');
+      res.status(404).send('No data found in the spreadsheet');
+    }
+  } catch (error) {
+    console.error('Error updating status and email:', error);
+    res.status(500).send(error.message || error.toString());
+  }
+});
+
+
+
+
 
 
 
